@@ -1,0 +1,35 @@
+version: 0.2
+env:
+  variables:
+    AWS_DEFAULT_REGION: "ap-northeast-2"
+    ECR_URL: "364481446289.dkr.ecr.ap-northeast-2.amazonaws.com"
+    ECR_DOCKER_IMAGE: "demo"
+    ECR_DOCKER_TAG: "1.0.0"
+
+phases:
+  pre_build:
+    commands:
+      - echo Compile maven
+      - mvn clean compile -f ./sample_app_spring/pom.xml
+      - echo Building maven
+      - mvn -Dmaven.test.failure.ignore=true install -f ./sample_app_spring/pom.xml
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_URL}
+  build:
+    on-failure: ABORT
+    commands:
+      - echo Build started on `date`
+      - echo Building the Docker image...
+      - docker build -t ${ECR_URL}/${ECR_DOCKER_IMAGE}:${ECR_DOCKER_TAG} ./sample_app_spring/
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker image...
+      - docker push ${ECR_URL}/${ECR_DOCKER_IMAGE}:${ECR_DOCKER_TAG}
+artifacts:
+  files:
+    - ./sample_app_spring/appspec.yml
+    - ./sample_app_spring/scripts/kill_process.sh
+    - ./sample_app_spring/scripts/run_process.sh
+    - ./sample_app_spring/docker-compose.yml
+  discard-paths: yes
