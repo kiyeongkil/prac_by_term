@@ -1,5 +1,5 @@
 pipeline {
-  agent { label 'master' }
+  agent any
 
   parameters {
     booleanParam(name : 'COMPILE_MVN', defaultValue : true, description: 'COMPILE_MVN')
@@ -24,62 +24,39 @@ pipeline {
     ECR_REPOSITORY = "${params.AWS_ACCOUNT_ID}.dkr.ecr.ap-northeast-2.amazonaws.com"
     ECR_DOCKER_IMAGE = "${ECR_REPOSITORY}/${params.DOCKER_IMAGE_NAME}"
     ECR_DOCKER_TAG = "${params.DOCKER_TAG}"
-
-    CODEBUILD_NAME = "jenkins-codebuild"
-    CODEBUILD_ARTIFACT_S3_NAME = "jenkins-artifact-codebuild-s3"
-    CODEBUILD_ARTIFACT_S3_KEY = "${currentBuild.number}/jenkins-codebuild"
-    CODEDEPLOY_NAME = "demo-codedeploy-app"
-    CODEDEPLOY_GROUP_NAME = "dev-codedeploy-group"
   }
 
   stages {
     stage('========== COMPILE_MVN =========='){
-      //agent { label 'slave' }
       when {
         expression { return params.COMPILE_MVN }
       }
       steps{
-        withMaven(maven : 'MAVEN') {
-          sh 'mvn clean compile -f ./sample_app_spring/pom.xml'
+        withMaven {
+          sh 'mvn clean compile -f ./pom.xml'
         }
       }
     }
 
     stage('========== BUILD_MVN ==========') {
-      //agent { label 'slave' }
       when {
         expression { return params.BUILD_MVN }
       }
       steps {
-        withMaven(maven : 'MAVEN') {
-          sh 'mvn -Dmaven.test.failure.ignore=true install -f ./sample_app_spring/pom.xml'
+        withMaven {
+          sh 'mvn -Dmaven.test.failure.ignore=true install -f ./pom.xml'
         }
       }
     }
 
     stage('========== BUILD_DOCKER_IMAGE ==========') {
-      //agent { label 'slave' }
       when {
         expression { return params.BUILD_DOCKER_IMAGE }
       }
       steps {
-        // jenkins 사용시 도커빌드 내용
-        // dir("${env.WORKSPACE}") {         //jenkins pipeline 구동시 defualt로 세팅되는 환경변수
-        //   sh 'docker build -t ${ECR_DOCKER_IMAGE}:${ECR_DOCKER_TAG} ./sample_app_spring/'   //dir로 접근하여 sh 명령 수행
-        // }
-        awsCodeBuild(
-          credentialsType: 'keys',
-          region: "${REGION}",
-          projectName: "${CODEBUILD_NAME}",
-          sourceControlType: 'jenkins',
-          sseAlgorithm: 'AES256',
-          buildSpecFile: "sample_app_spring/buildspec.yml",
-          artifactTypeOverride: "S3",
-          artifactNamespaceOverride: "NONE",
-          artifactPackagingOverride: "ZIP",
-          artifactPathOverride: "${currentBuild.number}",
-          artifactLocationOverride: "${CODEBUILD_ARTIFACT_S3_NAME}"
-        )
+        dir("${env.WORKSPACE}") {         //jenkins pipeline 구동시 defualt로 세팅되는 환경변수
+          sh 'docker build -t ${ECR_DOCKER_IMAGE}:${ECR_DOCKER_TAG} ./'   //dir로 접근하여 sh 명령 수행
+        }
       }
       post {
         always {
@@ -88,9 +65,8 @@ pipeline {
       }
     }
 
-    /* jenkins 사용시 docker hub에 이미지 푸시
+    // jenkins 사용시 docker hub에 이미지 푸시
     stage('========== PUSH_DOCKER_IMAGE ==========') {
-      //agent { label 'slave' }
       when {
         expression { return params.PUSH_DOCKER_IMAGE }
       }
@@ -122,44 +98,6 @@ pipeline {
                         docker-compose -f docker-compose.yaml up -d';
               """
           }
-      }
-    }
-    */
-    stage('========== DEPLOY_WORKLOAD ==========') {
-      when { expression { return params.DEPLOY_WORKLOAD } }
-      steps {
-        echo "Run CodeDeploy with creating deployment"
-        script {
-            sh'''
-                aws deploy create-deployment \
-                    --application-name ${CODEDEPLOY_NAME} \
-                    --deployment-group-name ${CODEDEPLOY_GROUP_NAME} \
-                    --region ${REGION} \
-                    --s3-location bucket=${CODEBUILD_ARTIFACT_S3_NAME},bundleType=zip,key=${CODEBUILD_ARTIFACT_S3_KEY} \
-                    --file-exists-behavior OVERWRITE \
-                    --output json > DEPLOYMENT_ID.json
-            '''
-            def DEPLOYMENT_ID = sh(script: "cat DEPLOYMENT_ID.json | grep -o '\"deploymentId\": \"[^\"]*' | cut -d'\"' -f4", returnStdout: true).trim()
-            echo "$DEPLOYMENT_ID"
-            sh "rm -rf ./DEPLOYMENT_ID.json"
-            def DEPLOYMENT_RESULT = ""
-            while("$DEPLOYMENT_RESULT" != "\"Succeeded\"") {
-                DEPLOYMENT_RESULT = sh(
-                    script:"aws deploy get-deployment \
-                                --region ${REGION} \
-                                --query \"deploymentInfo.status\" \
-                                --deployment-id ${DEPLOYMENT_ID}",
-                    returnStdout: true
-                ).trim()
-                echo "$DEPLOYMENT_RESULT"
-                if ("$DEPLOYMENT_RESULT" == "\"Failed\"") {
-                    currentBuild.result = 'FAILURE'
-                    break
-                }
-                sleep(10) // sleep 10s
-            }
-            currentBuild.result = 'SUCCESS'
-        }
       }
     }
   }
