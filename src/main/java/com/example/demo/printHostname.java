@@ -18,6 +18,6 @@ public class printHostname {
 			e.printStackTrace();
 		}
     	
-        return "Host: " + hostname;
+        return "Host: " + hostname + "\n";
     }
 }
